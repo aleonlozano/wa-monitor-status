@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Todas las campañas - WhatsApp Monitor</title>
+    <link
+        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+        rel="stylesheet"
+        integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH"
+        crossorigin="anonymous"
+    >
+    <style>
+        body {
+            background-color: #f5f6fa;
+        }
+        .brand-bar {
+            background: linear-gradient(135deg, #25D366, #128C7E);
+            color: #fff;
+        }
+        .stat-card {
+            border-radius: 0.75rem;
+        }
+        .table thead th {
+            background-color: #f0f2f5;
+        }
+    </style>
+</head>
+<body>
+
+<nav class="navbar navbar-expand-lg brand-bar mb-4">
+    <div class="container-fluid">
+        <a href="/" class="navbar-brand mb-0 h1 text-white text-decoration-none">WhatsApp Monitor</a>
+        <div class="d-flex align-items-center text-white-50">
+            <small class="me-3">Panel de estudio e investigación</small>
+            <a href="/admin/" class="btn btn-sm btn-light">Ir al Admin</a>
+        </div>
+    </div>
+</nav>
+
+<div class="container mb-5">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+            <h2 class="mb-0">Todas las campañas</h2>
+            <p class="text-muted mb-0">Listado completo de campañas configuradas en el monitor.</p>
+        </div>
+        <a href="/" class="btn btn-outline-secondary btn-sm">
+            ← Volver al panel
+        </a>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-body p-0">
+            {% if page_obj.object_list %}
+                <div class="table-responsive">
+                    <table class="table mb-0 align-middle">
+                        <thead>
+                            <tr>
+                                <th>Nombre</th>
+                                <th>Estado</th>
+                                <th>Contactos</th>
+                                <th>Creada</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for c in page_obj.object_list %}
+                                <tr>
+                                    <td>
+                                        <a href="{% url 'campaign_detail' c.id %}">
+                                            {{ c.name }}
+                                        </a>
+                                    </td>
+                                    <td>
+                                        {% if c.is_active %}
+                                            <span class="badge bg-success">Activa</span>
+                                        {% else %}
+                                            <span class="badge bg-secondary">Inactiva</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ c.contacts.count }}</td>
+                                    <td class="small text-muted">
+                                        {{ c.created_at|date:"d/m/Y H:i" }}
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <p class="p-3 mb-0 text-muted">
+                    Aún no hay campañas registradas.
+                </p>
+            {% endif %}
+        </div>
+
+        {% if page_obj.paginator.num_pages > 1 %}
+        <div class="card-footer bg-white">
+            <nav aria-label="Paginación de campañas">
+                <ul class="pagination justify-content-end mb-0">
+                    {% if page_obj.has_previous %}
+                        <li class="page-item">
+                            <a class="page-link" href="?page={{ page_obj.previous_page_number }}">&laquo;</a>
+                        </li>
+                    {% else %}
+                        <li class="page-item disabled">
+                            <span class="page-link">&laquo;</span>
+                        </li>
+                    {% endif %}
+
+                    {% for num in page_obj.paginator.page_range %}
+                        {% if num == page_obj.number %}
+                            <li class="page-item active">
+                                <span class="page-link">{{ num }}</span>
+                            </li>
+                        {% else %}
+                            <li class="page-item">
+                                <a class="page-link" href="?page={{ num }}">{{ num }}</a>
+                            </li>
+                        {% endif %}
+                    {% endfor %}
+
+                    {% if page_obj.has_next %}
+                        <li class="page-item">
+                            <a class="page-link" href="?page={{ page_obj.next_page_number }}">&raquo;</a>
+                        </li>
+                    {% else %}
+                        <li class="page-item disabled">
+                            <span class="page-link">&raquo;</span>
+                        </li>
+                    {% endif %}
+                </ul>
+            </nav>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<script
+    src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+    integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"
+    crossorigin="anonymous"
+></script>
+</body>
+</html>

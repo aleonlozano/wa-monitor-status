@@ -1,0 +1,29 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+  <div class="module">
+
+    <p>
+      Sube un archivo CSV con al menos estas columnas:
+      <code>name</code> y <code>phone_number</code>.
+      También se aceptan variantes como <code>Nombre</code> / <code>telefono</code>.
+    </p>
+
+    <form method="post" enctype="multipart/form-data">
+      {% csrf_token %}
+      <div class="form-row">
+        <label for="id_file"><strong>Archivo CSV:</strong></label>
+        <input type="file" name="file" id="id_file" accept=".csv">
+      </div>
+      <div class="submit-row">
+        <input type="submit" value="Importar" class="default">
+      </div>
+    </form>
+
+    <h3>Ejemplo de CSV</h3>
+    <pre>
+name,phone_number
+Andres Leon,573197956783
+    </pre>
+  </div>
+{% endblock %}
