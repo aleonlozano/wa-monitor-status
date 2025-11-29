@@ -8,10 +8,21 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Cargar variables del archivo .env
 load_dotenv(BASE_DIR / ".env")
 
-SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'dev-secret-key-change-me')
+# ❗ En producción NO dejes un valor por defecto
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
+if not SECRET_KEY:
+    raise RuntimeError("DJANGO_SECRET_KEY no está definido en el entorno")
 
-DEBUG = True
-ALLOWED_HOSTS = ['*']
+# ❗ En producción siempre False
+DEBUG = False
+
+
+# 👇 Acepta solo tu dominio (y, si quieres, la IP del VPS)
+ALLOWED_HOSTS = [
+    "wamonitor.destrategias.com",
+    "localhost",
+    "127.0.0.1",
+]
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -75,12 +86,17 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+# Para cookies/CSRF con HTTPS en el subdominio
+CSRF_TRUSTED_ORIGINS = [
+    "https://wamonitor.destrategias.com",
+]
+
 LANGUAGE_CODE = 'es-es'
 TIME_ZONE = 'America/Bogota'
 USE_I18N = True
 USE_TZ = True
 
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_DIRS = []
 
@@ -90,4 +106,4 @@ MEDIA_ROOT = BASE_DIR / 'media'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # URL del backend de WhatsApp Baileys
-WHATSAPP_API_URL = "http://localhost:3000/api"
+WHATSAPP_API_URL = "http://127.0.0.1:3000/api"

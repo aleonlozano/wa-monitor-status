@@ -66,28 +66,32 @@
                                 <p class="mb-2 small text-muted">
                                     Tamaño: {{ story.size }} bytes
                                 </p>
-                                {% with lower_url=story.url|lower %}
-                                    {% with ext4=lower_url|slice:"-4:" ext5=lower_url|slice:"-5:" %}
+                                {# Usamos el nombre de archivo para detectar el tipo, es más fiable #}
+                                {% with lower_name=story.filename|lower %}
+                                    {% with ext4=lower_name|slice:"-4:" ext5=lower_name|slice:"-5:" %}
                                         {# Imágenes comunes #}
                                         {% if ext4 == ".jpg" or ext4 == ".png" or ext5 == ".jpeg" %}
-                                            <a href="http://localhost:3000{{ story.url }}" target="_blank">
-                                                <img src="http://localhost:3000{{ story.url }}" alt="{{ story.filename }}">
+                                            <a href="{{ story.url }}" target="_blank">
+                                                <img src="{{ story.url }}" alt="{{ story.filename }}" class="img-fluid">
                                             </a>
-                                        {# Videos mp4: mostramos un pequeño reproductor y un link de descarga #}
+
+                                        {# Videos mp4: mostramos reproductor + link descarga #}
                                         {% elif ext4 == ".mp4" %}
                                             <video
-                                                src="http://localhost:3000{{ story.url }}"
+                                                src="{{ story.url }}"
                                                 class="w-100 mb-2"
                                                 controls
                                             >
                                             </video>
                                             <a
-                                                href="http://localhost:3000{{ story.url }}"
+                                                href="{{ story.url }}"
                                                 target="_blank"
                                                 class="btn btn-sm btn-outline-primary"
                                             >
                                                 🎬 Ver / descargar video
                                             </a>
+
+                                        {# Otros tipos #}
                                         {% else %}
                                             <p class="text-muted small mb-0">
                                                 Archivo no imagen (posible video u otro tipo): {{ story.filename }}

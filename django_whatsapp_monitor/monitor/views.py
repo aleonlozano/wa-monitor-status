@@ -5,6 +5,8 @@ from django.views.decorators.http import require_POST, require_GET
 from django.core.paginator import Paginator
 from django.db.models import Q, Count, F, FloatField
 from django.db.models.functions import Cast
+from django.conf import settings
+from pathlib import Path
 
 from .models import Campaign, Contact, MonitorResult
 from .image_recognition import compare_images
@@ -301,6 +303,31 @@ def contact_stories_view(request, contact_id):
         stories_data = wa_service.get_contact_stories(contact.phone_number)
     except Exception as e:
         error = str(e)
+        stories_data = None
+
+    # Normalizar historias: asegurar que tengan URL pública y tamaño opcional
+    if stories_data and isinstance(stories_data, dict) and stories_data.get("stories"):
+        phone = str(contact.phone_number)
+
+        # BASE_DIR = /root/whatsapp_baileys_monitor/django_whatsapp_monitor
+        # status_media_root = /root/whatsapp_baileys_monitor/node_backend/status_media
+        status_media_root = Path(settings.BASE_DIR).parent / "node_backend" / "status_media"
+
+        for story in stories_data.get("stories", []):
+            filename = story.get("filename")
+            if not filename:
+                continue
+
+            # URL pública servida por Nginx
+            story["url"] = f"/status_media/{phone}/{filename}"
+
+            # Completar tamaño si viene vacío
+            if not story.get("size"):
+                file_path = status_media_root / phone / filename
+                try:
+                    story["size"] = file_path.stat().st_size
+                except OSError:
+                    story["size"] = None
 
     return render(request, 'monitor/contact_stories.html', {
         'contact': contact,

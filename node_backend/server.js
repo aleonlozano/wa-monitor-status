@@ -276,7 +276,7 @@ async function ensureConnection() {
 // Notificar a Django cuando hay nueva historia
 async function notifyDjango(data) {
     try {
-        await axios.post('http://localhost:8000/api/process-story/', data);
+        await axios.post('http://127.0.0.1:8001/api/process-story/', data);
         console.log('Django notificado sobre nueva historia');
     } catch (error) {
         console.error('Error notificando a Django:', error.message);
@@ -437,6 +437,6 @@ app.post('/api/logout', async (req, res) => {
     }
 });
 
-app.listen(3000, () => {
+app.listen(3000, '127.0.0.1', () => {
     console.log('🚀 WhatsApp API con Baileys corriendo en http://localhost:3000');
 });
