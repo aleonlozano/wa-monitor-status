@@ -3,54 +3,63 @@ const {
     default: makeWASocket,
     useMultiFileAuthState,
     DisconnectReason,
-    downloadMediaMessage
-} = require('gifted-baileys');
+    downloadMediaMessage,
+    fetchLatestBaileysVersion
+} = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+
 const qrcode = require('qrcode-terminal');
+
+// Socket y estado globales
+let sock = null;
+let qrCode = '';
+let isConnecting = false;
+let lastQrPrinted = null; // evita imprimir el mismo QR una y otra vez
 
 const app = express();
 app.use(express.json());
 
-let sock;
-let qrCode = '';
-let isConnecting = false;
-
+// Clave: `${phone}:${msgKeyId}` para no mezclar múltiples estados del mismo teléfono
 const pendingStatus = new Map();
 const STATUS_MEDIA_TIMEOUT_MS = 4000; // 4s entre intentos
 const MAX_STATUS_RETRIES = 4;         // número de reintentos de history sync antes de marcar no_capturado
 
 async function scheduleNoMediaFallback(phone, msg) {
     const timestamp = Number(msg.messageTimestamp || Date.now());
-    const existing = pendingStatus.get(phone);
+    const msgKeyId = msg.key?.id || `tmp-${timestamp}`;
+    const pendingKey = `${phone}:${msgKeyId}`;
 
-    // Si ya había un pendiente para este teléfono, actualizamos key y timestamp
+    const existing = pendingStatus.get(pendingKey);
+
+    // Si ya había un pendiente para este teléfono+mensaje, actualizamos key y timestamp
     if (existing) {
         existing.lastMsgKey = msg.key;
         existing.timestamp = timestamp;
-        pendingStatus.set(phone, existing);
+        pendingStatus.set(pendingKey, existing);
         return;
     }
 
-    // Creamos una nueva entrada de seguimiento
+    // Creamos una nueva entrada de seguimiento por teléfono+mensaje
     const entry = {
         phone,
+        msgKeyId,
         lastMsgKey: msg.key,
         timestamp,
         retries: 0
     };
-    pendingStatus.set(phone, entry);
+    pendingStatus.set(pendingKey, entry);
 
     const runAttempt = async () => {
-        const current = pendingStatus.get(phone);
+        const current = pendingStatus.get(pendingKey);
         if (!current) return;
 
         if (current.retries >= MAX_STATUS_RETRIES) {
             // Ya hicimos varios intentos de history sync, nos rendimos y marcamos no_capturado
-            pendingStatus.delete(phone);
+            pendingStatus.delete(pendingKey);
             try {
                 await notifyDjango({
                     phone,
@@ -59,7 +68,7 @@ async function scheduleNoMediaFallback(phone, msg) {
                     timestamp: current.timestamp,
                     no_media: true
                 });
-                console.log('⚠️ Marcado como no_capturado tras varios intentos para teléfono', phone);
+                console.log('⚠️ Marcado como no_capturado tras varios intentos para teléfono', phone, 'mensaje', msgKeyId);
             } catch (err) {
                 console.error('Error notificando no_media a Django tras varios intentos:', err.message || err);
             }
@@ -67,12 +76,12 @@ async function scheduleNoMediaFallback(phone, msg) {
         }
 
         current.retries += 1;
-        pendingStatus.set(phone, current);
+        pendingStatus.set(pendingKey, current);
 
         // Intento best-effort de history sync si la librería lo soporta
         try {
             if (sock && typeof sock.fetchMessageHistory === 'function') {
-                console.log(`🔁 Intentando history sync (reintento ${current.retries}) para estados de`, phone);
+                console.log(`🔁 Intentando history sync (reintento ${current.retries}) para estados de`, phone, 'mensaje', msgKeyId);
                 await sock.fetchMessageHistory(
                     50,                  // cantidad máxima de mensajes
                     current.lastMsgKey,  // key del mensaje de estado que disparó el no_media
@@ -94,7 +103,7 @@ async function scheduleNoMediaFallback(phone, msg) {
 }
 
 async function processStatusMessage(msg, options = {}) {
-    if (!msg || msg.key.remoteJid !== 'status@broadcast') {
+    if (!msg || msg.key?.remoteJid !== 'status@broadcast') {
         return;
     }
 
@@ -103,19 +112,51 @@ async function processStatusMessage(msg, options = {}) {
 
     if (!msg.message) return;
 
-    const sender = msg.key.participant || '';
+    const sender = msg.key.participant || msg.key.remoteJid || '';
     const phone = sender.replace('@s.whatsapp.net', '');
     const timestamp = Number(msg.messageTimestamp || Date.now());
-    const messageType = Object.keys(msg.message)[0];
 
-    console.log('Tipo:', messageType, 'Teléfono:', phone, options.fromHistory ? '(from history)' : '');
+    const container = msg.message;
+    let effectiveType = null;
 
-    const mediaTypesToHandle = ['imageMessage', 'videoMessage', 'viewOnceMessageV2'];
+    // 1) viewOnceMessageV2 (dentro viene imageMessage o videoMessage)
+    if (container.viewOnceMessageV2 && container.viewOnceMessageV2.message) {
+        const inner = container.viewOnceMessageV2.message;
+        if (inner.imageMessage) {
+            effectiveType = 'imageMessage';
+        } else if (inner.videoMessage) {
+            effectiveType = 'videoMessage';
+        }
+    }
+    // 2) image/video al mismo nivel que senderKeyDistributionMessage
+    else if (container.imageMessage) {
+        effectiveType = 'imageMessage';
+    } else if (container.videoMessage) {
+        effectiveType = 'videoMessage';
+    }
 
-    if (mediaTypesToHandle.includes(messageType)) {
-        // Si llega media real, cancelamos cualquier pendiente de no_media
-        if (pendingStatus.has(phone)) {
-            pendingStatus.delete(phone);
+    // Para logs, seguimos viendo el “primer key” pero sólo como referencia
+    const firstKey = Object.keys(container)[0];
+    console.log(
+        'Tipo bruto (primer key):',
+        firstKey,
+        'Tipo efectivo:',
+        effectiveType || firstKey,
+        'Teléfono:',
+        phone,
+        options.fromHistory ? '(from history)' : ''
+    );
+
+    const msgKeyId = msg.key?.id || `tmp-${timestamp}`;
+    const pendingKey = `${phone}:${msgKeyId}`;
+    const isMedia =
+        effectiveType === 'imageMessage' ||
+        effectiveType === 'videoMessage';
+
+    if (isMedia) {
+        // Si llega media real, cancelamos cualquier pendiente de no_media para este teléfono+mensaje
+        if (pendingStatus.has(pendingKey)) {
+            pendingStatus.delete(pendingKey);
         }
 
         try {
@@ -125,25 +166,11 @@ async function processStatusMessage(msg, options = {}) {
                 {},
                 {
                     logger: console,
-                    reuploadRequest: sock.updateMediaMessage
+                    reuploadRequest: sock?.updateMediaMessage
                 }
             );
 
-            let extension = 'bin';
-            if (messageType === 'imageMessage') {
-                extension = 'jpg';
-            } else if (messageType === 'videoMessage') {
-                extension = 'mp4';
-            } else if (messageType === 'viewOnceMessageV2') {
-                const inner = msg.message.viewOnceMessageV2?.message || {};
-                const innerType = Object.keys(inner)[0];
-                if (innerType === 'imageMessage') {
-                    extension = 'jpg';
-                } else if (innerType === 'videoMessage') {
-                    extension = 'mp4';
-                }
-            }
-
+            let extension = (effectiveType === 'imageMessage') ? 'jpg' : 'mp4';
             const filename = `${timestamp}_${phone}.${extension}`;
             const statusDir = path.join(__dirname, 'status_media', phone);
 
@@ -155,19 +182,35 @@ async function processStatusMessage(msg, options = {}) {
             fs.writeFileSync(filepath, buffer);
 
             console.log(`✅ Historia guardada: ${filepath}`);
+            console.log(
+                '   Detalle captura OK -> phone:',
+                phone,
+                'tipo:',
+                effectiveType,
+                'timestamp:',
+                timestamp
+            );
 
             await notifyDjango({
                 phone,
                 filepath,
-                messageType,
+                messageType: effectiveType,
                 timestamp
             });
         } catch (error) {
             console.error('Error descargando historia:', error);
         }
     } else {
-        // Mensaje de estado sin media directa (ej. senderKeyDistributionMessage)
-        console.log('Tipo de estado no soportado aún (sin media directa):', messageType);
+        // Mensaje de estado sin media directa: aquí sí usamos el fallback
+        console.log('Tipo de estado no soportado aún (sin media directa):', firstKey);
+        try {
+            console.log(
+                'Payload crudo de msg.message para análisis:',
+                JSON.stringify(msg.message, null, 2)
+            );
+        } catch (e) {
+            console.log('No se pudo serializar msg.message:', e.message || e);
+        }
         await scheduleNoMediaFallback(phone, msg);
     }
 }
@@ -180,9 +223,11 @@ app.use('/media/status', express.static(path.join(__dirname, 'status_media')));
 
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_baileys');
+    const { version } = await fetchLatestBaileysVersion();
 
     sock = makeWASocket({
         auth: state,
+        version,
         browser: ['Django Monitor', 'Chrome', '10.0']
     });
 
@@ -190,7 +235,8 @@ async function connectToWhatsApp() {
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
 
-        if (qr) {
+        if (qr && qr !== lastQrPrinted) {
+            lastQrPrinted = qr;
             qrCode = qr;
             console.log('QR Code actualizado (escanéalo en tu celular).');
             qrcode.generate(qr, { small: true });
@@ -203,11 +249,29 @@ async function connectToWhatsApp() {
 
             const isConflict = statusCode === DisconnectReason.conflict || statusCode === 440;
             const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+            const is405 = statusCode === 405;
 
-            console.log('Conexión cerrada, statusCode:', statusCode, 'conflict:', isConflict, 'loggedOut:', isLoggedOut);
+            console.log(
+                'Conexión cerrada, statusCode:',
+                statusCode,
+                'conflict:',
+                isConflict,
+                'loggedOut:',
+                isLoggedOut
+            );
 
             // Limpiamos el socket en memoria
             sock = null;
+
+            if (is405) {
+                // 405 suele indicar un problema de versión / handshake a nivel de servidor.
+                // No intentamos reconectar en bucle, dejamos que el operador revise versión y reinicie.
+                console.error(
+                    '⚠️ Recibido statusCode 405 (Connection Failure). ' +
+                    'Revisa que estés usando la última versión de @whiskeysockets/baileys y vuelve a iniciar el proceso.'
+                );
+                return;
+            }
 
             if (isConflict) {
                 // Caso típico: "stream:error conflict type=replaced"
@@ -241,10 +305,39 @@ async function connectToWhatsApp() {
         }
     });
 
+    // Procesar actualizaciones de mensajes (por si un status se completa con media después)
+    sock.ev.on('messages.update', async (updates) => {
+        try {
+            for (const { key, update } of updates) {
+                if (!update?.message) {
+                    continue;
+                }
+                if (key?.remoteJid !== 'status@broadcast') {
+                    continue;
+                }
+
+                const syntheticMsg = {
+                    key,
+                    message: update.message,
+                    messageTimestamp: update.messageTimestamp || Date.now()
+                };
+
+                console.log('♻️ messages.update para status. key.id:', key.id);
+                await processStatusMessage(syntheticMsg, { fromHistory: false, upsertType: 'update' });
+            }
+        } catch (err) {
+            console.error('Error procesando messages.update:', err);
+        }
+    });
+
     // También procesar mensajes históricos que lleguen por history sync
     sock.ev.on('messaging-history.set', async ({ messages = [], syncType }) => {
         try {
+            console.log('📚 messaging-history.set recibido. syncType:', syncType, 'total mensajes:', messages.length);
             for (const msg of messages) {
+                if (msg?.key?.remoteJid === 'status@broadcast') {
+                    console.log('   • Mensaje de status en history.set. key.id:', msg.key.id, 'timestamp:', msg.messageTimestamp);
+                }
                 await processStatusMessage(msg, { fromHistory: true, syncType });
             }
         } catch (err) {
@@ -289,12 +382,20 @@ ensureConnection().catch(err => console.error('Error inicial conectando a WhatsA
 
 // Obtener QR Code (para mostrarlo si quisieras en Django)
 app.get('/api/qr', async (req, res) => {
-    // Intento best-effort de asegurar que hay una sesión inicializada
     try {
-        await ensureConnection();
+        const hasUser = !!(sock && sock.user);
+
+        // Sólo intentamos conectar si:
+        // - No hay usuario conectado
+        // - No tenemos un QR ya generado
+        // - Y no estamos ya en medio de un intento de conexión
+        if (!hasUser && !qrCode && !isConnecting) {
+            await ensureConnection();
+        }
     } catch (err) {
         console.error('Error en ensureConnection desde /api/qr:', err);
     }
+
     res.json({ qr: qrCode || null });
 });
 // Iniciar o reiniciar sesión de WhatsApp (bajo demanda desde el panel Django)
